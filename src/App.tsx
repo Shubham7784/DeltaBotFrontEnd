@@ -52,7 +52,7 @@ export default function App() {
     fetch(`${BASE_URL}/api/is-directional-enabled`).then(res => res.json()).then(data => setIsDirectionalEnabled(data));
 
     //const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`ws://deltabotbackend-production.up.railway.app/ws`);
+    const socket = new WebSocket(`wss://deltabotbackend-production.up.railway.app/ws`);
 
     socket.onmessage = (event) => {
       const payload = JSON.parse(event.data);
