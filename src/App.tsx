@@ -42,8 +42,10 @@ export default function App() {
     { msg: "DeltaBot System Initialized", type: "info" },
     { msg: "Connecting to WebSocket...", type: "info" }
   ]);
-  const BASE_URL = "https://deltabotbackend-production.up.railway.app";
-  //const BASE_URL = "http://localhost:8000";
+  const [isPaperTrading, setIsPaperTrading] = useState(true);
+  const [marketTrend, setMarketTrend] = useState("Neutral");
+  //const BASE_URL = "https://deltabotbackend-production.up.railway.app";
+  const BASE_URL = "http://localhost:8000";
   useEffect(() => {
     // Initial fetch
     fetch(`${BASE_URL}/api/wallet`).then(res => res.json()).then(setWallet);
@@ -52,7 +54,7 @@ export default function App() {
     fetch(`${BASE_URL}/api/is-directional-enabled`).then(res => res.json()).then(data => setIsDirectionalEnabled(data));
 
     //const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`wss://deltabotbackend-production.up.railway.app/ws`);
+    const socket = new WebSocket(`ws://localhost:8000/ws`);
 
     socket.onmessage = (event) => {
       const payload = JSON.parse(event.data);
@@ -60,6 +62,9 @@ export default function App() {
         setBtcPrice(payload.data.price);
         setWallet(payload.wallet);
         setPositions(payload.positions);
+        setIsPaperTrading(payload.isPaperTrading);
+        setMarketTrend(payload.marketTrend);
+        console.log("Received market update:", payload);
         if (payload.risk) {
           setNetDelta(payload.risk.netDelta);
           setNetTheta(payload.risk.netTheta);
@@ -292,11 +297,11 @@ export default function App() {
             <h3 className="text-[11px] text-slate-500 uppercase font-bold tracking-widest mb-3">Signals (V1 SIM)</h3>
             <div className="space-y-2">
               <div className="flex justify-between">
-                <span className="text-[11px] text-slate-400">Trend (EMA 20)</span>
+                <span className="text-[11px] text-slate-400">Trend</span>
                 <span className={cn(
                   "text-[11px] font-bold uppercase",
-                  btcPrice > 65000 ? "text-green-400" : "text-red-400"
-                )}>{btcPrice > 65000 ? "Bullish" : "Bearish"}</span>
+                  marketTrend === "Bullish" ? "text-green-400" : "text-red-400"
+                )}>{marketTrend}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-[11px] text-slate-400">Directional</span>
@@ -304,7 +309,7 @@ export default function App() {
               </div>
               <div className="flex justify-between">
                 <span className="text-[11px] text-slate-400">Mode</span>
-                <span className="text-[11px] text-orange-500 font-bold uppercase">Paper</span>
+                <span className="text-[11px] text-orange-500 font-bold uppercase">{isPaperTrading ? "Paper" : "Live"}</span>
               </div>
             </div>
           </div>
