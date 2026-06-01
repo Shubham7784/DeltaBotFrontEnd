@@ -44,17 +44,16 @@ export default function App() {
   ]);
   const [isPaperTrading, setIsPaperTrading] = useState(true);
   const [marketTrend, setMarketTrend] = useState("Neutral");
-  //const BASE_URL = "https://deltabotbackend-production.up.railway.app";
-  const BASE_URL = "http://localhost:8000";
+  const BASE_URL = "https://deltabotbackend-production.up.railway.app";
+  //const BASE_URL = "http://localhost:8000";
   useEffect(() => {
     // Initial fetch
     fetch(`${BASE_URL}/api/wallet`).then(res => res.json()).then(setWallet);
     fetch(`${BASE_URL}/api/positions`).then(res => res.json()).then(setPositions);
     fetch(`${BASE_URL}/api/is-bot-running`).then(res => res.json()).then(data => setIsBotRunning(data));
     fetch(`${BASE_URL}/api/is-directional-enabled`).then(res => res.json()).then(data => setIsDirectionalEnabled(data));
-
     //const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`ws://localhost:8000/ws`);
+    const socket = new WebSocket(`wss://deltabotbackend-production.up.railway.app/ws`);
 
     socket.onmessage = (event) => {
       const payload = JSON.parse(event.data);
@@ -69,8 +68,10 @@ export default function App() {
           setNetDelta(payload.risk.netDelta);
           setNetTheta(payload.risk.netTheta);
           setNetGamma(payload.risk.netGamma);
-          setIsDirectionalEnabled(payload.risk.directionalEnabled);
         }
+        payload.logs.forEach(log=>
+          addLog(log.message,log.type)
+        );
       }
     };
 
