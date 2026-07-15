@@ -94,7 +94,7 @@ export default function App() {
 
   const toggleBot = async () => {
     if (isBotRunning) {
-      await fetch(`${BASE_URL}/api/positions/close-all`, { method: "POST" });
+      await fetch(`${BASE_URL}/api/strategy1/disable`, { method: "POST" });
       setIsBotRunning(false);
       addLog("Emergency shutdown: All trades closed.", "error");
     } else {
