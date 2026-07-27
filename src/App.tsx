@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   TrendingUp, 
   Wallet, 
@@ -22,9 +22,71 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { Line, LineChart, ResponsiveContainer, Tooltip, YAxis } from "recharts";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+const number = (value: unknown, fallback = 0) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+const label = (value: unknown, fallback = "—") => value === undefined || value === null || value === "" ? fallback : String(value);
+const pretty = (value: unknown) => label(value).replace(/_/g, " ");
+
+function AdaptiveChart({ title, data, dataKey, color, suffix = "" }: { title: string; data: any[]; dataKey: string; color: string; suffix?: string }) {
+  const points = (Array.isArray(data) ? data : []).map((item, index) => ({ index, value: number(item?.[dataKey] ?? item?.[dataKey.replace(/[A-Z]/g, m => `_${m.toLowerCase()}`)]), time: item?.timestamp ?? item?.time }));
+  return (
+    <div className="h-28 min-w-[150px] flex-1 border border-[#1F1F22] bg-black/20 p-2">
+      <div className="flex justify-between text-[9px] uppercase text-slate-500 mb-1"><span>{title}</span><span className="font-mono text-slate-300">{points.length ? `${points[points.length - 1].value.toFixed(2)}${suffix}` : "—"}</span></div>
+      {points.length ? <ResponsiveContainer width="100%" height="78%"><LineChart data={points}><YAxis hide domain={["auto", "auto"]} /><Tooltip contentStyle={{ background: "#0E0E10", border: "1px solid #2A2A2E", fontSize: 10 }} labelFormatter={() => ""} formatter={(v: number) => [`${v.toFixed(3)}${suffix}`, title]} /><Line type="monotone" dataKey="value" stroke={color} strokeWidth={1.5} dot={false} isAnimationActive={false} /></LineChart></ResponsiveContainer> : <div className="h-[78%] flex items-center justify-center text-[10px] text-slate-600 italic">Awaiting market data</div>}
+    </div>
+  );
+}
+
+function AdaptiveStrategyDashboard({ adaptive, baseUrl, addLog }: { adaptive: any; baseUrl: string; addLog: (message: string, type?: 'info' | 'warn' | 'error' | 'trade') => void }) {
+  const [closeOnStop, setCloseOnStop] = useState(false);
+  const [working, setWorking] = useState(false);
+  const status = label(adaptive?.status ?? adaptive?.state ?? adaptive?.tradingStatus ?? adaptive?.executionStatus, "no_trade").toLowerCase();
+  const regime = adaptive?.marketRegime ?? adaptive?.market_regime ?? adaptive?.regime ?? {};
+  const selected = adaptive?.selectedStrategy ?? adaptive?.selected_strategy ?? adaptive?.strategy;
+  const position = adaptive?.position ?? adaptive?.activePosition ?? adaptive?.active_position;
+  const risk = adaptive?.riskLimits ?? adaptive?.risk_limits ?? adaptive?.risk ?? {};
+  const rawHistory = adaptive?.timeSeries ?? adaptive?.time_series ?? adaptive?.history ?? adaptive?.indicators ?? [];
+  const history = Array.isArray(rawHistory) ? rawHistory : rawHistory?.data ?? rawHistory?.points ?? [];
+  const scores = adaptive?.strategyScores ?? adaptive?.strategy_scores ?? adaptive?.scores ?? {};
+  const strategies = adaptive?.strategies ?? adaptive?.availableStrategies ?? adaptive?.available_strategies ?? Object.entries(scores).map(([name, score]) => ({ name, score }));
+  const isEnabled = Boolean((adaptive?.enabled ?? adaptive?.isEnabled) ?? (status === "executed" || status === "monitoring"));
+  const regimeConfidence = regime?.confidence ?? adaptive?.marketRegimeConfidence ?? adaptive?.market_regime_confidence ?? adaptive?.confidence;
+  const reasons = regime?.reasons ?? adaptive?.marketRegimeReasons ?? adaptive?.market_regime_reasons ?? adaptive?.analysisReasons ?? adaptive?.analysis_reasons ?? [];
+  const stateText: Record<string, string> = { disabled: "Adaptive trading is disabled. Start it when you want the strategy engine to scan.", no_trade: "No trade right now. The engine is waiting for a qualifying setup.", risk_rejected: "A candidate was rejected by active risk limits.", entry_rejected: "The selected strategy did not meet its entry conditions.", executed: "An adaptive strategy is actively managing a position.", monitoring: "Adaptive trading is monitoring the market for its next setup." };
+  const post = async (url: string, message: string) => {
+    setWorking(true);
+    try {
+      const response = await fetch(`${baseUrl}${url}`, { method: "POST" });
+      if (!response.ok) throw new Error(`Request failed (${response.status})`);
+      addLog(message, "info");
+    } catch (error) { addLog(error instanceof Error ? error.message : "Adaptive strategy request failed", "error"); }
+    finally { setWorking(false); }
+  };
+  const entries = Array.isArray(strategies) ? strategies : Object.entries(strategies).map(([name, value]) => ({ name, ...(typeof value === "object" ? value as object : { score: value }) }));
+  const legs = position?.legs ?? position?.groupedLegs ?? position?.grouped_legs ?? [];
+  const utilisation = (used: unknown, limit: unknown) => number(limit) > 0 ? Math.min(100, number(used) / number(limit) * 100) : 0;
+  return <div className="bg-[#0E0E10] p-4 flex-1 min-h-0 overflow-y-auto">
+    <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b border-[#1F1F22] pb-2">
+      <div><h3 className="text-[11px] text-slate-500 uppercase font-bold tracking-widest">Adaptive Strategy Dashboard</h3><p className="text-[10px] text-slate-600 mt-1">{stateText[status] ?? "No trade right now. Waiting for a complete adaptive update."}</p></div>
+      <div className={cn("text-[10px] font-bold uppercase tracking-wider px-2 py-1 border", isEnabled ? "text-green-400 border-green-500/30 bg-green-900/10" : "text-slate-400 border-[#2A2A2E]")}>{pretty(status)}</div>
+    </div>
+    <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 mb-3">
+      <div className="border border-[#1F1F22] bg-[#16161A]/50 p-3"><span className="text-[9px] text-slate-500 uppercase">Market regime</span><div className="mt-1 flex justify-between gap-3"><b className="text-xs uppercase text-slate-200">{pretty(regime?.name ?? regime?.regime ?? regime)}</b><span className="text-xs font-mono text-orange-400">{number(regimeConfidence) ? `${(number(regimeConfidence) * (number(regimeConfidence) <= 1 ? 100 : 1)).toFixed(0)}%` : "—"}</span></div><div className="mt-2 text-[10px] text-slate-400 leading-relaxed">{Array.isArray(reasons) ? (reasons.length ? reasons.map(String).join(" · ") : "Analysis reasons will appear with the next market update.") : label(reasons, "Analysis reasons will appear with the next market update.")}</div></div>
+      <div className="border border-[#1F1F22] bg-[#16161A]/50 p-3"><span className="text-[9px] text-slate-500 uppercase">Decision</span><div className="mt-1 text-xs font-bold text-slate-200">{label(selected, "No strategy selected")}</div><div className="mt-2 text-[10px] text-slate-400">{label(adaptive?.entryReason ?? adaptive?.entry_reason ?? adaptive?.rejectionReason ?? adaptive?.rejection_reason, "Awaiting a qualified entry")}</div></div>
+      <div className="border border-[#1F1F22] bg-[#16161A]/50 p-3"><span className="text-[9px] text-slate-500 uppercase">Adaptive position</span><div className="mt-1 flex justify-between"><b className="text-xs text-slate-200">{label(position?.name ?? position?.strategy, "No active position")}</b><b className={cn("text-xs font-mono", number(position?.pnl ?? position?.livePnL ?? position?.live_pnl) >= 0 ? "text-green-400" : "text-red-400")}>{position ? `${number(position?.pnl ?? position?.livePnL ?? position?.live_pnl) >= 0 ? "+" : ""}$${number(position?.pnl ?? position?.livePnL ?? position?.live_pnl).toFixed(2)}` : "—"}</b></div><div className="mt-2 text-[10px] text-slate-400">Margin: {label(position?.marginUsage ?? position?.margin_usage ?? position?.margin, "—")} · Delta: {label(position?.deltaExposure ?? position?.delta_exposure ?? position?.greeks?.delta, "—")}</div></div>
+    </div>
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 mb-3">
+      <div className="border border-[#1F1F22] p-3"><span className="text-[9px] text-slate-500 uppercase">Position legs & Greeks</span>{Array.isArray(legs) && legs.length ? <div className="mt-2 space-y-1 text-[10px] font-mono">{legs.map((leg: any, i: number) => <div key={leg.id ?? i} className="flex justify-between text-slate-300"><span>{label(leg.symbol ?? leg.instrument ?? leg.name)}</span><span className={leg.side === "LONG" ? "text-green-400" : "text-red-400"}>{label(leg.side)} {label(leg.size ?? leg.quantity)}</span></div>)}</div> : <div className="mt-2 text-[10px] text-slate-600 italic">No active adaptive legs</div>}<div className="mt-2 pt-2 border-t border-[#1F1F22] flex gap-3 text-[10px] font-mono text-slate-400"><span>Δ {label(position?.greeks?.delta ?? position?.delta)}</span><span>Γ {label(position?.greeks?.gamma ?? position?.gamma)}</span><span>Θ {label(position?.greeks?.theta ?? position?.theta)}</span><span>V {label(position?.greeks?.vega ?? position?.vega)}</span></div></div>
+      <div className="border border-[#1F1F22] p-3"><span className="text-[9px] text-slate-500 uppercase">Risk limits <span className="normal-case text-slate-600">· server-configured</span></span><div className="mt-2 space-y-2">{Object.entries(risk).filter(([, value]) => value !== null && typeof value !== "object").slice(0, 4).map(([name, limit]) => { const used = adaptive?.riskUtilisation?.[name] ?? adaptive?.risk_utilisation?.[name] ?? adaptive?.riskUsage?.[name]; const percent = utilisation(used, limit); return <div key={name}><div className="flex justify-between text-[10px] text-slate-400"><span>{pretty(name)}</span><span className="font-mono">{used !== undefined ? `${used} / ` : ""}{label(limit)}</span></div><div className="h-1 bg-[#1F1F22] mt-1"><div className={cn("h-full", percent > 80 ? "bg-red-500" : "bg-orange-500")} style={{ width: `${percent}%` }} /></div></div>; })}{!Object.keys(risk).length && <div className="text-[10px] text-slate-600 italic">Risk limits are server-configured and not yet reported.</div>}</div><div className="mt-2 text-[10px] text-slate-500">Expiry preference: <span className="text-slate-300">{label(adaptive?.expiryPreference ?? adaptive?.expiry_preference, "server-configured")}</span></div></div>
+    </div>
+    <div className="flex gap-2 overflow-x-auto pb-1 mb-3"><AdaptiveChart title="BTC Price" data={history} dataKey="btcPrice" color="#F27D26" /><AdaptiveChart title="IV" data={history} dataKey="iv" color="#A78BFA" suffix="%" /><AdaptiveChart title="ATR" data={history} dataKey="atr" color="#60A5FA" /><AdaptiveChart title="ADX" data={history} dataKey="adx" color="#34D399" /><AdaptiveChart title="Funding" data={history} dataKey="fundingRate" color="#FBBF24" suffix="%" /></div>
+    <div className="grid grid-cols-1 xl:grid-cols-[1fr_auto] gap-3 border-t border-[#1F1F22] pt-3"><div className="flex flex-wrap gap-2">{entries.length ? entries.map((strategy: any, i: number) => { const name = typeof strategy === "string" ? strategy : label(strategy.name ?? strategy.strategy ?? strategy[0]); const enabled = strategy.enabled ?? strategy.isEnabled ?? true; const score = strategy.score ?? scores?.[name]; return <div key={`${name}-${i}`} className="border border-[#2A2A2E] px-2 py-1.5 text-[10px] flex items-center gap-2"><span className="text-slate-300">{name}</span><span className="font-mono text-slate-500">{score !== undefined ? Number(score).toFixed(2) : "—"}</span><button disabled={working} onClick={() => post(`/api/adaptive-strategy/${encodeURIComponent(name)}/enabled?enabled=${!enabled}`, `${name} ${enabled ? "disabled" : "enabled"}`)} className={cn("uppercase font-bold", enabled ? "text-green-400 hover:text-red-400" : "text-slate-500 hover:text-green-400")}>{enabled ? "On" : "Off"}</button></div>; }) : <span className="text-[10px] text-slate-600 italic">Strategy scores will appear when reported by the server.</span>}</div><div className="flex items-center gap-2"><label className="flex items-center gap-1 text-[10px] text-slate-400 whitespace-nowrap"><input type="checkbox" checked={closeOnStop} onChange={e => setCloseOnStop(e.target.checked)} className="accent-[#F27D26]" />Close on stop</label><button disabled={working} onClick={() => post(isEnabled ? `/api/adaptive-strategy/disable${closeOnStop ? "?close_active=true" : ""}` : "/api/adaptive-strategy/enable", isEnabled ? "Adaptive trading stopped" : "Adaptive trading started")} className={cn("px-3 py-1.5 text-[10px] font-bold uppercase border rounded", isEnabled ? "border-red-500/50 text-red-400 hover:bg-red-900/20" : "border-green-500/50 text-green-400 hover:bg-green-900/20")}>{working ? "Working…" : isEnabled ? "Stop adaptive" : "Start adaptive"}</button></div></div>
+  </div>;
 }
 
 export default function App() {
@@ -44,41 +106,60 @@ export default function App() {
   ]);
   const [isPaperTrading, setIsPaperTrading] = useState(true);
   const [marketTrend, setMarketTrend] = useState("Neutral");
+  const [adaptiveStrategy, setAdaptiveStrategy] = useState<any>(null);
+  const [adaptivePosition, setAdaptivePosition] = useState<any>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
   const WS_URL = import.meta.env.VITE_BACKEND_WS_URL || "ws://localhost:8000/ws";
   useEffect(() => {
-    // Initial fetch
-    fetch(`${BASE_URL}/api/wallet`).then(res => res.json()).then(setWallet);
-    fetch(`${BASE_URL}/api/positions`).then(res => res.json()).then(setPositions);
-    fetch(`${BASE_URL}/api/is-bot-running`).then(res => res.json()).then(data => setIsBotRunning(data));
-    fetch(`${BASE_URL}/api/is-directional-enabled`).then(res => res.json()).then(data => setIsDirectionalEnabled(data));
-    //const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(WS_URL);
-
-    socket.onmessage = (event) => {
-      const payload = JSON.parse(event.data);
-      if (payload.type === "MARKET_UPDATE") {
-        setBtcPrice(payload.data.price);
-        setWallet(payload.wallet);
-        setPositions(payload.positions);
-        setIsPaperTrading(payload.isPaperTrading);
-        setMarketTrend(payload.marketTrend);
-        console.log("Received market update:", payload);
-        if (payload.risk) {
-          setNetDelta(payload.risk.netDelta);
-          setNetTheta(payload.risk.netTheta);
-          setNetGamma(payload.risk.netGamma);
-        }
-        payload.logs.forEach(log=>
-          addLog(log.message,log.type)
-        );
-      }
+    let disposed = false;
+    let socket: WebSocket | null = null;
+    const fetchAdaptiveStatus = () => {
+      fetch(`${BASE_URL}/api/adaptive-strategy/status`)
+        .then(res => res.ok ? res.json() : Promise.reject(new Error("Adaptive status unavailable")))
+        .then(data => !disposed && setAdaptiveStrategy(data?.adaptiveStrategy ?? data))
+        .catch(() => !disposed && setAdaptiveStrategy(current => current));
     };
-
-    socket.onopen = () => addLog("WebSocket Connected", "info");
-    socket.onerror = () => addLog("WebSocket Connection Error", "error");
-
-    return () => socket.close();
+    fetch(`${BASE_URL}/api/wallet`).then(res => res.json()).then(setWallet).catch(() => undefined);
+    fetch(`${BASE_URL}/api/positions`).then(res => res.json()).then(setPositions).catch(() => undefined);
+    fetch(`${BASE_URL}/api/is-bot-running`).then(res => res.json()).then(data => setIsBotRunning(data)).catch(() => undefined);
+    fetch(`${BASE_URL}/api/is-directional-enabled`).then(res => res.json()).then(data => setIsDirectionalEnabled(data)).catch(() => undefined);
+    fetchAdaptiveStatus();
+    const connect = () => {
+      socket = new WebSocket(WS_URL);
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type !== "MARKET_UPDATE") return;
+          setBtcPrice(payload.data?.price ?? payload.price ?? 0);
+          if (payload.wallet) setWallet(payload.wallet);
+          if (payload.positions) setPositions(payload.positions);
+          if (typeof payload.isPaperTrading === "boolean") setIsPaperTrading(payload.isPaperTrading);
+          if (payload.marketTrend) setMarketTrend(payload.marketTrend);
+          if (payload.adaptiveStrategy) {
+            setAdaptiveStrategy(payload.adaptiveStrategy);
+          }
+          if(payload.marketRegime || payload.marketRegimeConfidence !== undefined || payload.marketRegimeReasons || payload.adaptivePosition || payload.currentAdaptivePosition) {
+            setAdaptiveStrategy({
+              marketRegime: payload.marketRegime,
+              marketRegimeConfidence: payload.marketRegimeConfidence,
+              marketRegimeReasons: payload.marketRegimeReasons,
+              activePosition: payload.adaptivePosition ?? payload.currentAdaptivePosition,
+            });
+          }
+          if(payload.adaptivePosition){
+            setAdaptivePosition(payload.adaptivePosition);
+          }
+          if (payload.risk) { setNetDelta(payload.risk.netDelta ?? 0); setNetTheta(payload.risk.netTheta ?? 0); setNetGamma(payload.risk.netGamma ?? 0); }
+          (payload.logs ?? []).forEach((log: any) => addLog(log.message, log.type));
+        } catch { addLog("Invalid WebSocket market update", "warn"); }
+      };
+      socket.onopen = () => { addLog("WebSocket Connected", "info"); fetchAdaptiveStatus(); };
+      socket.onerror = () => addLog("WebSocket Connection Error", "error");
+      socket.onclose = () => { if (!disposed) reconnectTimer.current = setTimeout(connect, 3000); };
+    };
+    connect();
+    return () => { disposed = true; if (reconnectTimer.current) clearTimeout(reconnectTimer.current); socket?.close(); };
   }, []);
 
   const fetchHistory = async () => {
@@ -318,7 +399,7 @@ export default function App() {
 
         {/* Middle: Position Monitor & Strategy Focus */}
         <section className="col-span-6 flex flex-col gap-1 overflow-hidden">
-          <div className="flex-1 bg-[#0E0E10] p-4 flex flex-col overflow-hidden">
+          <div className="h-48 bg-[#0E0E10] p-4 flex flex-col overflow-hidden shrink-0">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-[11px] text-slate-500 uppercase font-bold tracking-widest">Active Positions</h3>
               <div className="flex gap-4">
@@ -368,36 +449,7 @@ export default function App() {
               </table>
             </div>
           </div>
-          <div className="h-40 bg-[#0E0E10] p-4 flex gap-4 shrink-0 overflow-hidden">
-            <div className={cn(
-              "flex-1 rounded p-3 border transition-all",
-              isBotRunning ? "bg-[#16161A] border-[#2A2A2E]" : "bg-black/20 border-white/5 opacity-50"
-            )}>
-              <span className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Strategy 1: Iron Fly</span>
-              <div className="flex items-center gap-2 mb-2">
-                <div className={cn(
-                  "w-2 h-2 rounded-full",
-                  isBotRunning ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-slate-700"
-                )}></div>
-                <span className="text-xs font-bold">{isBotRunning ? "Hedged Neutrally" : "Idle"}</span>
-              </div>
-              <span className="text-[10px] text-slate-400">Targeting: <span className="text-white font-mono">{(Math.round(btcPrice / 100) * 100) + 300}</span></span>
-            </div>
-            <div className={cn(
-              "flex-1 rounded p-3 border transition-all",
-              isDirectionalEnabled ? "bg-[#16161A] border-[#2A2A2E] opacity-100" : "bg-black/20 border-white/5 opacity-50"
-            )}>
-              <span className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Strategy 2: Directional</span>
-              <div className="flex items-center gap-2 mb-2">
-                <div className={cn(
-                  "w-2 h-2 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.5)]",
-                  isDirectionalEnabled ? "bg-blue-500" : "bg-slate-700"
-                )}></div>
-                <span className="text-xs font-bold">{isDirectionalEnabled ? "Monitoring" : "Disabled"}</span>
-              </div>
-              <span className="text-[10px] text-slate-400 italic">Waiting for signal...</span>
-            </div>
-          </div>
+          <AdaptiveStrategyDashboard adaptive={adaptiveStrategy} baseUrl={BASE_URL} addLog={addLog} />
         </section>
 
         {/* Right Sidebar: Controls & Actions */}
